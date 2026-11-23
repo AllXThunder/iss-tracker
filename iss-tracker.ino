@@ -1,6 +1,8 @@
 #include <Adafruit_ILI9341.h>
 #include <Adafruit_GFX.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 #define TOGGLE_PIN 4
 #define TFT_CS 5
@@ -12,7 +14,10 @@
 const char* SSID = "Wokwi-GUEST";
 const char* PASS = "";
 
-bool currentMode = 1; // 1 - globe; 0 - list
+unsigned long lastISSUpdate = 0;
+const unsigned long ISS_UPDATE_INTERVAL = 60000;
+
+bool currentMode = 1; // 1 - глобус; 0 - список
 bool lastButtonState = HIGH;
 
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
@@ -32,13 +37,13 @@ void setup() {
 
   if (connectToWiFi()) {
         Serial.println("Network ready");
+        tft.fillScreen(ILI9341_BLACK);
+        tft.setCursor(10, 10);
+        tft.println("Globe");
+        fetchISSData();
     } else {
-        Serial.println("Working offline");
+        Serial.println("Try again");
     }
-
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setCursor(10, 10);
-  tft.println("Globe");
 }
 
 void handleButton() {
@@ -65,10 +70,12 @@ bool connectToWiFi() {
   Serial.println("Connecting to Wokwi-GUEST");
 
   WiFi.begin(SSID, PASS);
+  WiFi.setTimeout(30000);
   unsigned long startTime = millis();
 
   while (WiFi.status() != WL_CONNECTED) {
-    if (millis() - startTime > 15000) {
+    if (millis() - startTime > 30000) {
+      delay(1000);
       tft.println();
       tft.print("Wi-Fi FAIL.");
       Serial.println("Wi-Fi FAIL.");
@@ -77,7 +84,9 @@ bool connectToWiFi() {
     }
   delay(500);
   tft.print(".");
-  Serial.print(".");
+  Serial.print("Status: ");
+  Serial.println(WiFi.status());
+  delay(500);
   }
   tft.println();
   tft.print("Wi-Fi OK.");
@@ -87,7 +96,32 @@ bool connectToWiFi() {
   return true;
 }
 
+void fetchISSData() {
+  HTTPClient http;
+  WiFiClient client;
+
+  http.begin(client, "http://api.open-notify.org/iss-now.json");
+  http.setReuse(false);
+  http.setTimeout(10000);
+
+  int httpCode = http.GET();
+  
+  if (httpCode > 0) {
+    String payload = http.getString();
+    Serial.println(payload);
+  } else {
+    Serial.printf("HTTP request failed. Code: %d\n", httpCode);
+  }
+  http.end();
+  JsonDocument doc;
+}
+
 void loop() {
   handleButton();
+
+  if (currentMode == 1 && millis() - lastISSUpdate > ISS_UPDATE_INTERVAL) {
+    lastISSUpdate = millis();
+    fetchISSData();
+  }
   delay(10);
 }
