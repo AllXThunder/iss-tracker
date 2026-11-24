@@ -20,6 +20,9 @@ const unsigned long ISS_UPDATE_INTERVAL = 60000;
 bool currentMode = 1; // 1 - глобус; 0 - список
 bool lastButtonState = HIGH;
 
+float issLat = 0.0;
+float issLon = 0.0;
+
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 
 void setup() {
@@ -107,13 +110,25 @@ void fetchISSData() {
   int httpCode = http.GET();
   
   if (httpCode > 0) {
-    String payload = http.getString();
-    Serial.println(payload);
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, http.getString());
+    if (error) {
+      Serial.print("JSON parse failed: ");
+      Serial.println(error.c_str());
+      return;
+    } else {
+      issLat = doc["iss_position"]["latitude"].as<float>();
+      issLon = doc["iss_position"]["longitude"].as<float>();
+
+      Serial.print("latitude = ");
+      Serial.print(issLat);
+      Serial.print(", longitude = ");
+      Serial.println(issLon);
+    }
   } else {
     Serial.printf("HTTP request failed. Code: %d\n", httpCode);
   }
   http.end();
-  JsonDocument doc;
 }
 
 void loop() {
