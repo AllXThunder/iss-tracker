@@ -17,67 +17,31 @@ const char* PASS = "";
 unsigned long lastISSUpdate = 0;
 const unsigned long ISS_UPDATE_INTERVAL = 60000;
 
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 60000;
+
 bool currentMode = 1; // 1 - глобус; 0 - список
 bool lastButtonState = HIGH;
 
 float issLat = 0.0;
 float issLon = 0.0;
+bool issDataValid = false;
 
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(TOGGLE_PIN, INPUT_PULLUP);
-  tft.begin();
-  tft.setRotation(1);
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setCursor(10, 10);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.println("Booting...");
-  delay(500);
-
-  if (connectToWiFi()) {
-        Serial.println("Network ready");
-        tft.fillScreen(ILI9341_BLACK);
-        tft.setCursor(10, 10);
-        tft.println("Globe");
-        fetchISSData();
-    } else {
-        Serial.println("Try again");
-    }
-}
-
-void handleButton() {
-  bool buttonState = digitalRead(TOGGLE_PIN);
-  if (buttonState == LOW && lastButtonState == HIGH) {
-    delay(50);
-    currentMode = !currentMode;
-    Serial.print("Mode = "); Serial.println(currentMode);
-    tft.fillScreen(ILI9341_BLACK);
-    tft.setCursor(10, 10);
-    if (currentMode == 1) {
-      tft.println("Globe");
-    } else {
-      tft.println("List");
-    }
-  }
-  lastButtonState = buttonState;
-}
-
-bool connectToWiFi() {
+bool connectToWiFi(unsigned long timeoutMs = 30000) {
   tft.fillScreen(ILI9341_BLACK);
   tft.setCursor(10, 10);
   tft.print("Connecting to Wi-Fi...");
   Serial.println("Connecting to Wokwi-GUEST");
 
+  WiFi.disconnect(true);
+  delay(100);
   WiFi.begin(SSID, PASS);
-  WiFi.setTimeout(30000);
   unsigned long startTime = millis();
 
   while (WiFi.status() != WL_CONNECTED) {
-    if (millis() - startTime > 30000) {
+    if (millis() - startTime > timeoutMs) {
       delay(1000);
       tft.println();
       tft.print("Wi-Fi FAIL.");
@@ -99,7 +63,67 @@ bool connectToWiFi() {
   return true;
 }
 
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(TOGGLE_PIN, INPUT_PULLUP);
+  tft.begin();
+  tft.setRotation(1);
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setCursor(10, 10);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(2);
+  tft.println("Booting...");
+  delay(500);
+
+  bool connected = false;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    Serial.print("Connection attempt ");
+    Serial.println(attempt);
+    if (connectToWiFi()) {
+      connected = true;
+      break;
+    }
+    Serial.println("Attempt failed. Retrying in 2 seconds...");
+    delay(2000);
+  }
+
+    if (connected) {
+    Serial.println("Network ready");
+    fetchISSData();
+    drawGlobeMode();
+  } else {
+    Serial.println("Failed to connect after 3 attempts. Working offline.");
+    drawGlobeMode();
+  }
+}
+
+void handleButton() {
+  bool buttonState = digitalRead(TOGGLE_PIN);
+  if (buttonState == LOW && lastButtonState == HIGH) {
+    delay(50);
+    currentMode = !currentMode;
+    Serial.print("Mode = "); Serial.println(currentMode);
+    
+    if (currentMode == 1) {
+      drawGlobeMode();
+    } else {
+      tft.fillScreen(ILI9341_BLACK);
+      tft.setCursor(10, 10);
+      tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+      tft.setTextSize(2);
+      tft.println("List mode (stub)");
+    }
+  }
+  lastButtonState = buttonState;
+}
+
 void fetchISSData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("fetchISSData: No WiFi, skipping.");
+    return;
+  }
+
   HTTPClient http;
   WiFiClient client;
 
@@ -119,6 +143,7 @@ void fetchISSData() {
     } else {
       issLat = doc["iss_position"]["latitude"].as<float>();
       issLon = doc["iss_position"]["longitude"].as<float>();
+      issDataValid = true;
 
       Serial.print("latitude = ");
       Serial.print(issLat);
@@ -131,12 +156,63 @@ void fetchISSData() {
   http.end();
 }
 
+void drawGlobeMode() {
+  tft.fillRect(0, 0, 320, 40, ILI9341_BLACK);
+  tft.setCursor(10, 10);
+  tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+  tft.setTextSize(3);
+  tft.println("ISS Tracker");
+
+  tft.fillRect(0, 50, 320, 100, ILI9341_BLACK);
+  tft.setCursor(10, 60);
+  
+  if (issDataValid) {
+    tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+    tft.setTextSize(2);
+    
+    tft.print("Lat: ");
+    tft.println(issLat, 4);
+    
+    tft.print("Lon: ");
+    tft.println(issLon, 4);
+  } else {
+    tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+    tft.setTextSize(2);
+    tft.println("Waiting for data...");
+  }
+}
+
 void loop() {
   handleButton();
 
-  if (currentMode == 1 && millis() - lastISSUpdate > ISS_UPDATE_INTERVAL) {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
+      lastReconnectAttempt = millis();
+      Serial.println("WiFi lost. Attempting to reconnect...");
+      tft.fillScreen(ILI9341_BLACK);
+      tft.setCursor(10, 10);
+      tft.println("Reconnecting...");
+      connectToWiFi(10000);
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Reconnected!");
+        lastISSUpdate = 0;
+      } else {
+        Serial.println("Reconnect failed.");
+        tft.fillScreen(ILI9341_BLACK);
+        tft.setCursor(10, 10);
+        tft.println("Offline");
+      }
+    }
+  }
+
+  if (currentMode == 1 && WiFi.status() == WL_CONNECTED && 
+      millis() - lastISSUpdate > ISS_UPDATE_INTERVAL) {
     lastISSUpdate = millis();
     fetchISSData();
+    if (currentMode == 1) {
+      drawGlobeMode();
+    }
   }
+
   delay(10);
 }
