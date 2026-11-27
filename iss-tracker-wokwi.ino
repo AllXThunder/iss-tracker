@@ -120,40 +120,43 @@ void handleButton() {
 
 void fetchISSData() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("fetchISSData: No WiFi, skipping.");
+    Serial.println("fetchISSData: No WiFi.");
     return;
   }
 
   HTTPClient http;
   WiFiClient client;
-
   http.begin(client, "http://api.open-notify.org/iss-now.json");
   http.setReuse(false);
   http.setTimeout(10000);
-
   int httpCode = http.GET();
   
-  if (httpCode > 0) {
+  if (httpCode == 200) { // Строго проверяем 200 ОК
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, http.getString());
     if (error) {
-      Serial.print("JSON parse failed: ");
-      Serial.println(error.c_str());
+      Serial.print("JSON parse failed: "); Serial.println(error.c_str());
+      drawErrorScreen("DATA ERROR");
       return;
     } else {
       issLat = doc["iss_position"]["latitude"].as<float>();
       issLon = doc["iss_position"]["longitude"].as<float>();
       issDataValid = true;
-
-      Serial.print("latitude = ");
-      Serial.print(issLat);
-      Serial.print(", longitude = ");
-      Serial.println(issLon);
+      Serial.println("Data OK");
     }
   } else {
-    Serial.printf("HTTP request failed. Code: %d\n", httpCode);
+    Serial.printf("HTTP failed. Code: %d\n", httpCode);
+    drawErrorScreen("API/Wi-Fi OFFLINE"); 
   }
   http.end();
+}
+
+void drawErrorScreen(String errorMsg) {
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setCursor(10, 130);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_RED);
+  tft.setTextSize(2);
+  tft.print(errorMsg);
 }
 
 void drawGlobeMode() {
