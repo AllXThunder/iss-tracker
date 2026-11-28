@@ -27,6 +27,12 @@ float issLat = 0.0;
 float issLon = 0.0;
 bool issDataValid = false;
 
+String astronauts[15];
+int astronautCount = 0;
+bool astronautDataValid = false;
+unsigned long lastAstroUpdate = 0;
+const unsigned long ASTRO_UPDATE_INTERVAL = 300000;
+
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 
 bool connectToWiFi(unsigned long timeoutMs = 30000) {
@@ -63,6 +69,46 @@ bool connectToWiFi(unsigned long timeoutMs = 30000) {
   return true;
 }
 
+void fetchAstronautData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("fetchAstronautData: No WiFi.");
+    return;
+  }
+
+  HTTPClient http;
+  WiFiClient client;
+  http.begin(client, "http://api.open-notify.org/astros.json");
+  http.setReuse(false);
+  http.setTimeout(10000);
+  int httpCode = http.GET();
+
+  if (httpCode == 200) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, http.getString());
+    if (error) {
+      Serial.print("JSON parse failed: "); Serial.println(error.c_str());
+      drawErrorScreen("DATA ERROR");
+      return;
+    }
+
+    astronautCount = 0;
+    JsonArray people = doc["people"];
+    for (JsonObject person : people) {
+      if (astronautCount < 15) {
+        astronauts[astronautCount] = person["name"].as<String>();
+        astronautCount++;
+      }
+    }
+    astronautDataValid = true;
+    Serial.print("Astronauts loaded: ");
+    Serial.println(astronautCount);
+  } else {
+    Serial.printf("Astronaut HTTP failed. Code: %d\n", httpCode);
+    astronautDataValid = false;
+  }
+  http.end();
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -90,7 +136,6 @@ void setup() {
 
     if (connected) {
     Serial.println("Network ready");
-    fetchISSData();
     drawGlobeMode();
   } else {
     Serial.println("Failed to connect after 3 attempts. Working offline.");
@@ -102,17 +147,16 @@ void handleButton() {
   bool buttonState = digitalRead(TOGGLE_PIN);
   if (buttonState == LOW && lastButtonState == HIGH) {
     delay(50);
+    tft.fillScreen(ILI9341_BLACK);
     currentMode = !currentMode;
     Serial.print("Mode = "); Serial.println(currentMode);
     
     if (currentMode == 1) {
+      fetchISSData();
       drawGlobeMode();
     } else {
-      tft.fillScreen(ILI9341_BLACK);
-      tft.setCursor(10, 10);
-      tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
-      tft.setTextSize(2);
-      tft.println("List mode (stub)");
+      fetchAstronautData();
+      drawListMode();
     }
   }
   lastButtonState = buttonState;
@@ -131,7 +175,7 @@ void fetchISSData() {
   http.setTimeout(10000);
   int httpCode = http.GET();
   
-  if (httpCode == 200) { // Строго проверяем 200 ОК
+  if (httpCode == 200) {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, http.getString());
     if (error) {
@@ -151,6 +195,36 @@ void fetchISSData() {
   http.end();
 }
 
+void drawListMode() {
+  tft.fillScreen(ILI9341_BLACK);
+
+  tft.setCursor(10, 10);
+  tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.print("Crew on ISS: ");
+
+  if (astronautDataValid) {
+    tft.println(astronautCount);
+
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+    int y = 40;
+
+    for (int i = 0; i < astronautCount; i++) {
+      tft.setCursor(10, y);
+      tft.print(i + 1);
+      tft.print(". ");
+      tft.println(astronauts[i]);
+      y += 15;
+    }
+  } else {
+    tft.println("");
+    tft.setTextSize(2);
+    tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+    tft.println("Waiting for data...");
+  }
+}
+
 void drawErrorScreen(String errorMsg) {
   tft.fillScreen(ILI9341_BLACK);
   tft.setCursor(10, 130);
@@ -160,7 +234,8 @@ void drawErrorScreen(String errorMsg) {
 }
 
 void drawGlobeMode() {
-  tft.fillRect(0, 0, 320, 40, ILI9341_BLACK);
+  tft.fillScreen(ILI9341_BLACK);
+  
   tft.setCursor(10, 10);
   tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
   tft.setTextSize(3);
@@ -214,6 +289,15 @@ void loop() {
     fetchISSData();
     if (currentMode == 1) {
       drawGlobeMode();
+    }
+  }
+
+  if (currentMode == 0 && WiFi.status() == WL_CONNECTED && 
+      millis() - lastAstroUpdate > ASTRO_UPDATE_INTERVAL) {
+    lastAstroUpdate = millis();
+    fetchAstronautData();
+    if (currentMode == 0) {
+      drawListMode();
     }
   }
 
